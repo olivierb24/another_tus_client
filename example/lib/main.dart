@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:universal_io/io.dart';
 
 import 'package:cross_file/cross_file.dart' show XFile;
 import 'package:device_info_plus/device_info_plus.dart';
@@ -6,7 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:tus_client_dart/tus_client_dart.dart';
+import 'package:another_tus_client/another_tus_client.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 void main() {

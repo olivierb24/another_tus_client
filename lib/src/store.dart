@@ -1,4 +1,9 @@
-import 'dart:io';
+import 'dart:js_interop';
+
+import 'package:universal_io/io.dart';
+import 'dart:async';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:web/web.dart' as web;
 
 /// Implementations of this interface are used to lookup a
 /// [fingerprint] with the corresponding [file].
@@ -90,5 +95,165 @@ class TusFileStore implements TusStore {
   Future<File> _getFile(String fingerprint) async {
     final filePath = '${directory.absolute.path}/$fingerprint';
     return File(filePath);
+  }
+}
+
+/// [TusIndexedDBStore] uses browser IndexedDB for storing upload URLs.
+/// Useful for larger or more complex data than localStorage can handle.
+class TusIndexedDBStore implements TusStore {
+  final String dbName;
+  final String storeName;
+  final int dbVersion;
+
+  /// Reference to the opened IndexedDB database
+  web.IDBDatabase? _db;
+
+  TusIndexedDBStore({
+    this.dbName = 'tus_uploads',
+    this.storeName = 'files',
+    this.dbVersion = 1,
+  });
+
+  /// Opens (or creates) the DB if not already open
+  Future<web.IDBDatabase> _openDatabase() async {
+    if (!kIsWeb) {
+      throw UnsupportedError('IndexedDB is only supported in web contexts');
+    }
+
+    if (_db != null) {
+      return _db!;
+    }
+
+    final completer = Completer<web.IDBDatabase>();
+
+    try {
+      final request = web.window.indexedDB.open(dbName, dbVersion);
+
+      request.onupgradeneeded = ((web.Event event) {
+        final db = request.result;
+        if (db is web.IDBDatabase) {
+          if (!db.objectStoreNames.contains(storeName)) {
+            db.createObjectStore(storeName);
+          }
+        }
+      } as web.EventHandler);
+
+      request.onsuccess = ((web.Event event) {
+        final result = request.result;
+        if (result is web.IDBDatabase) {
+          _db = result;
+          completer.complete(result);
+        } else {
+          completer.completeError('Unexpected result type');
+        }
+      } as web.EventHandler);
+
+      request.onerror = ((web.Event event) {
+        completer.completeError('Failed to open IndexedDB: ${request.error}');
+      } as web.EventHandler);
+    } catch (e) {
+      completer.completeError('Error opening IndexedDB: $e');
+    }
+
+    return completer.future;
+  }
+
+  @override
+  Future<void> set(String fingerprint, Uri url) async {
+    if (!kIsWeb) {
+      throw UnsupportedError('IndexedDB is only supported in web contexts');
+    }
+
+    final db = await _openDatabase();
+    final txn = db.transaction(storeName as JSAny, 'readwrite');
+    final store = txn.objectStore(storeName);
+
+    final completer = Completer<void>();
+
+    try {
+      final putRequest =
+          store.put(url.toString() as JSAny?, fingerprint as JSAny?);
+
+      putRequest.onsuccess = ((web.Event event) {
+        completer.complete();
+      } as web.EventHandler);
+
+      putRequest.onerror = ((web.Event event) {
+        completer.completeError(
+          'Failed to store URL in IndexedDB: ${putRequest.error}',
+        );
+      } as web.EventHandler);
+    } catch (e) {
+      completer.completeError('Error in set operation: $e');
+    }
+
+    return completer.future;
+  }
+
+  @override
+  Future<Uri?> get(String fingerprint) async {
+    if (!kIsWeb) {
+      throw UnsupportedError('IndexedDB is only supported in web contexts');
+    }
+
+    final db = await _openDatabase();
+    final txn = db.transaction(storeName as JSAny, 'readonly');
+    final store = txn.objectStore(storeName);
+
+    final completer = Completer<Uri?>();
+
+    try {
+      final getRequest = store.get(fingerprint as JSAny?);
+
+      getRequest.onsuccess = ((web.Event event) {
+        final value = getRequest.result;
+        if (value != null && value is String && (value as String).isNotEmpty) {
+          completer.complete(Uri.parse(value as String));
+        } else {
+          completer.complete(null);
+        }
+      } as web.EventHandler);
+
+      getRequest.onerror = ((web.Event event) {
+        completer.completeError(
+          'Failed to retrieve URL from IndexedDB: ${getRequest.error}',
+        );
+      } as web.EventHandler);
+    } catch (e) {
+      completer.completeError('Error in get operation: $e');
+    }
+
+    return completer.future;
+  }
+
+  @override
+  Future<void> remove(String fingerprint) async {
+    if (!kIsWeb) {
+      throw UnsupportedError('IndexedDB is only supported in web contexts');
+    }
+
+    final db = await _openDatabase();
+    final txn = db.transaction(storeName as JSAny, 'readwrite');
+    final store = txn.objectStore(storeName);
+
+    final completer = Completer<void>();
+
+    try {
+      final delRequest = store.delete(fingerprint as JSAny?);
+
+      delRequest.onsuccess = ((web.Event event) {
+        completer.complete();
+      } as web.EventHandler);
+
+      delRequest.onerror = ((web.Event event) {
+        completer.completeError(
+          'Failed to remove URL from IndexedDB: ${delRequest.error}',
+        );
+      } as web.EventHandler);
+    } catch (e) {
+      completer.completeError('Error in remove operation: $e');
+    }
+
+    return completer.future;
   }
 }

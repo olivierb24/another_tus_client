@@ -1,29 +1,45 @@
 import 'dart:async';
 import 'dart:developer';
-import 'dart:io';
 import 'dart:math' show min;
 import 'dart:typed_data' show Uint8List, BytesBuilder;
+
+import 'package:cross_file/cross_file.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:http/http.dart' as http;
 import 'package:speed_test_dart/speed_test_dart.dart';
-import 'package:tus_client_dart/src/retry_scale.dart';
-import 'package:tus_client_dart/src/tus_client_base.dart';
 
 import 'exceptions.dart';
-import 'package:http/http.dart' as http;
+import 'package:another_tus_client/src/retry_scale.dart';
+import 'package:another_tus_client/src/tus_client_base.dart';
 
 /// This class is used for creating or resuming uploads.
 class TusClient extends TusClientBase {
+  /// Create a new TusClient
+  ///
+  /// [file] An XFile instance representing the file to upload
+  /// [store] Optional store for resumable uploads
+  /// [maxChunkSize] Maximum size of chunks for upload (default: 512KB)
+  /// [retries] Number of retries for failed uploads
+  /// [retryScale] Scaling policy for retry intervals
+  /// [retryInterval] Base interval between retries in milliseconds
   TusClient(
-    super.file, {
+    XFile super.file, {
     super.store,
     super.maxChunkSize = 512 * 1024,
     super.retries = 0,
     super.retryScale = RetryScale.constant,
     super.retryInterval = 0,
-  }) {
+  }) : 
+    _file = file {
     _fingerprint = generateFingerprint() ?? "";
   }
 
-  /// Override this method to use a custom Client
+  final XFile _file;
+  
+  /// The file being uploaded
+  XFile get file => _file;
+
+  /// Override this method to use a custom HTTP Client
   http.Client getHttpClient() => http.Client();
 
   int _actualRetry = 0;
@@ -31,7 +47,16 @@ class TusClient extends TusClientBase {
   /// Create a new [upload] throwing [ProtocolException] on server error
   Future<void> createUpload() async {
     try {
-      _fileSize = await file.length();
+      _fileSize = (_file.length ?? 0) as int?;
+      if (_fileSize == 0) {
+        // If file size isn't known, try to get the entire content to determine size
+        if (kIsWeb) {
+          final content = await _file.readAsBytes();
+          _fileSize = content.length;
+        } else {
+          throw ProtocolException('Cannot determine file size');
+        }
+      }
 
       final client = getHttpClient();
       final createHeaders = Map<String, String>.from(headers ?? {})
@@ -63,14 +88,16 @@ class TusClient extends TusClientBase {
 
       _uploadUrl = _parseUrl(urlStr);
       store?.set(_fingerprint, _uploadUrl as Uri);
-    } on FileSystemException {
-      throw Exception('Cannot find file to upload');
+    } catch (e) {
+      if (e is ProtocolException) rethrow;
+      throw Exception('Cannot initiate file upload: $e');
     }
   }
 
+  /// Check if the upload is resumable
   Future<bool> isResumable() async {
     try {
-      _fileSize = await file.length();
+      _fileSize = (_file.length ?? 0) as int?;
       _pauseUpload = false;
 
       if (!resumingEnabled) {
@@ -83,8 +110,6 @@ class TusClient extends TusClientBase {
         return false;
       }
       return true;
-    } on FileSystemException {
-      throw Exception('Cannot find file to upload');
     } catch (e) {
       return false;
     }
@@ -172,9 +197,6 @@ class TusClient extends TusClientBase {
     }
 
     while (!_pauseUpload && _offset < totalBytes) {
-      if (!File(file.path).existsSync()) {
-        throw Exception("Cannot find file ${file.path.split('/').last}");
-      }
       final uploadHeaders = Map<String, String>.from(headers ?? {})
         ..addAll({
           "Tus-Resumable": tusVersion,
@@ -276,7 +298,7 @@ class TusClient extends TusClientBase {
         retryInterval,
       );
       _actualRetry += 1;
-      log('Failed to upload,try: $_actualRetry, interval: $waitInterval');
+      log('Failed to upload, try: $_actualRetry, interval: $waitInterval');
       await Future.delayed(waitInterval);
       return await _performUpload(
         onComplete: onComplete,
@@ -300,6 +322,7 @@ class TusClient extends TusClientBase {
     }
   }
 
+  /// Cancel the current upload and remove it from the store
   Future<bool> cancelUpload() async {
     try {
       await pauseUpload();
@@ -315,6 +338,7 @@ class TusClient extends TusClientBase {
     await store?.remove(_fingerprint);
   }
 
+  /// Set the upload data for the client
   void setUploadData(
     Uri url,
     Map<String, String>? headers,
@@ -324,6 +348,17 @@ class TusClient extends TusClientBase {
     this.headers = headers;
     this.metadata = metadata;
     _uploadMetadata = generateMetadata();
+  }
+
+  /// Generate a fingerprint for the file
+  @override
+  String? generateFingerprint() {
+    if (_file.path.isNotEmpty) {
+      return "${_file.path}-${_file.name}-${_file.length ?? 0}";
+    } else {
+      // On web, or when path is not available, use name and length
+      return "${_file.name}-${_file.length ?? 0}";
+    }
   }
 
   /// Get offset from server throwing [ProtocolException] on error
@@ -353,14 +388,15 @@ class TusClient extends TusClientBase {
   }
 
   /// Get data from file to upload
-
   Future<Uint8List> _getData() async {
     int start = _offset;
     int end = _offset + maxChunkSize;
     end = end > (_fileSize ?? 0) ? _fileSize ?? 0 : end;
 
     final result = BytesBuilder();
-    await for (final chunk in file.openRead(start, end)) {
+    
+    // Use XFile's openRead to get a stream of the file content
+    await for (final chunk in _file.openRead(start, end)) {
       result.add(chunk);
     }
 

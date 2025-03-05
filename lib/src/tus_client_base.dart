@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:cross_file/cross_file.dart';
 import 'package:speed_test_dart/classes/server.dart';
-import 'package:tus_client_dart/tus_client_dart.dart';
+import 'package:another_tus_client/another_tus_client.dart';
 
 abstract class TusClientBase {
   /// Version of the tus protocol used by the client. The remote server needs to
