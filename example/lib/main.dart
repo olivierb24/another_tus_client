@@ -49,14 +49,15 @@ class _UploadPageState extends State<UploadPage> {
   Uri? _fileUrl;
   bool _isLoading = false;
   bool _isSettingsOpen = false;
+  bool _isPaused = false;
 
   // Endpoint settings
   final TextEditingController _endpointController = TextEditingController();
-  
+
   // FilePicker settings
   bool _withData = true;
   bool _withReadStream = true;
-  
+
   // Headers and metadata
   List<MapEntry<String, String>> _headers = [MapEntry('', '')];
   List<MapEntry<String, String>> _metadata = [MapEntry('', '')];
@@ -98,16 +99,16 @@ class _UploadPageState extends State<UploadPage> {
 
   Future<void> _loadSettings() async {
     setState(() => _isLoading = true);
-    
+
     try {
       final prefs = await SharedPreferences.getInstance();
-      
+
       setState(() {
         _endpointController.text =
             prefs.getString('endpoint') ?? 'http://localhost:8080/files/';
         _withData = prefs.getBool('withData') ?? true;
         _withReadStream = prefs.getBool('withReadStream') ?? true;
-        
+
         // Load headers
         final headersJson = prefs.getString('headers');
         if (headersJson != null) {
@@ -117,7 +118,7 @@ class _UploadPageState extends State<UploadPage> {
               .toList();
           if (_headers.isEmpty) _headers = [MapEntry('', '')];
         }
-        
+
         // Load metadata
         final metadataJson = prefs.getString('metadata');
         if (metadataJson != null) {
@@ -141,11 +142,11 @@ class _UploadPageState extends State<UploadPage> {
   Future<void> _saveSettings() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      
+
       await prefs.setString('endpoint', _endpointController.text);
       await prefs.setBool('withData', _withData);
       await prefs.setBool('withReadStream', _withReadStream);
-      
+
       // Save headers (removing empty ones)
       final Map<String, String> headersMap = {};
       for (var entry in _headers) {
@@ -154,7 +155,7 @@ class _UploadPageState extends State<UploadPage> {
         }
       }
       await prefs.setString('headers', jsonEncode(headersMap));
-      
+
       // Save metadata (removing empty ones)
       final Map<String, String> metadataMap = {};
       for (var entry in _metadata) {
@@ -163,7 +164,7 @@ class _UploadPageState extends State<UploadPage> {
         }
       }
       await prefs.setString('metadata', jsonEncode(metadataMap));
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Settings saved')),
       );
@@ -228,8 +229,7 @@ class _UploadPageState extends State<UploadPage> {
               style: TextStyle(fontWeight: FontWeight.bold)),
           CheckboxListTile(
             title: Text('With Data (load file into memory)'),
-            subtitle:
-                Text('Required for some platforms, but uses more memory'),
+            subtitle: Text('Required for some platforms, but uses more memory'),
             value: _withData,
             onChanged: (value) {
               setState(() {
@@ -250,8 +250,9 @@ class _UploadPageState extends State<UploadPage> {
           SizedBox(height: 16),
           // Headers
           Text('Custom Headers', style: TextStyle(fontWeight: FontWeight.bold)),
-          ..._buildKeyValueList(_headers, _headerKeyControllers,
-              _headerValueControllers, (newHeaders) {
+          ..._buildKeyValueList(
+              _headers, _headerKeyControllers, _headerValueControllers,
+              (newHeaders) {
             setState(() {
               _headers = newHeaders;
             });
@@ -271,8 +272,9 @@ class _UploadPageState extends State<UploadPage> {
           SizedBox(height: 16),
           // Metadata
           Text('Metadata', style: TextStyle(fontWeight: FontWeight.bold)),
-          ..._buildKeyValueList(_metadata, _metadataKeyControllers,
-              _metadataValueControllers, (newMetadata) {
+          ..._buildKeyValueList(
+              _metadata, _metadataKeyControllers, _metadataValueControllers,
+              (newMetadata) {
             setState(() {
               _metadata = newMetadata;
             });
@@ -442,12 +444,17 @@ class _UploadPageState extends State<UploadPage> {
                             print("Create a client");
                             _client = TusClient(
                               _file!,
-                              store: store,
-                              maxChunkSize: 512 * 1024 * 10,
+                              store: store, // Returns a IndexedDB when web
+                              maxChunkSize: 6 * 1024 * 1024, //6MB chunks
                             );
 
+                            // Reset pause state.
+                            setState(() {
+                              _isPaused = false;
+                            });
+
                             print("Starting upload");
-                            
+
                             // Convert header entries to map
                             final headersMap = <String, String>{};
                             for (var entry in _headers) {
@@ -455,7 +462,7 @@ class _UploadPageState extends State<UploadPage> {
                                 headersMap[entry.key] = entry.value;
                               }
                             }
-                            
+
                             // Convert metadata entries to map
                             final metadataMap = <String, String>{};
                             for (var entry in _metadata) {
@@ -463,17 +470,26 @@ class _UploadPageState extends State<UploadPage> {
                                 metadataMap[entry.key] = entry.value;
                               }
                             }
-                            
+
+                            final timestamp =
+                                DateTime.now().millisecondsSinceEpoch;
+                            final uniqueFileName =
+                                '${timestamp}_${_file?.name ?? 'file'}';
+
+                            metadataMap["contentType"] = _file?.mimeType ??
+                                'application/octet-stream'; // Add null check with default MIME type
+                            metadataMap["objectName"] = uniqueFileName;
+
                             await _client!.upload(
                               onStart:
                                   (TusClient client, Duration? estimation) {
-                                print(estimation);
+                                print(
+                                    "Upload started. Estimation: $estimation");
                               },
                               onComplete: () async {
                                 print("Completed!");
                                 if (!kIsWeb) {
-                                  final tempDir =
-                                      await getTemporaryDirectory();
+                                  final tempDir = await getTemporaryDirectory();
                                   final tempDirectory = Directory(
                                       '${tempDir.path}/${_file?.name}_uploads');
                                   if (tempDirectory.existsSync()) {
@@ -502,12 +518,26 @@ class _UploadPageState extends State<UploadPage> {
                 SizedBox(width: 8),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: _progress == 0 || _client == null
+                    onPressed: _client == null || _progress == 0
                         ? null
                         : () async {
-                            await _client!.pauseUpload();
+                            if (!_isPaused) {
+                              print("Pausing upload...");
+                              await _client!.pauseUpload();
+                              setState(() {
+                                _isPaused = true;
+                              });
+                              print("Upload paused.");
+                            } else {
+                              print("Resuming upload...");
+                              await _client!.resumeUpload();
+                              setState(() {
+                                _isPaused = false;
+                              });
+                              print("Upload resumed.");
+                            }
                           },
-                    child: Text("Pause"),
+                    child: Text(_isPaused ? "Resume" : "Pause"),
                   ),
                 ),
               ],
@@ -542,16 +572,18 @@ class _UploadPageState extends State<UploadPage> {
           ),
           if (_progress > 0)
             ElevatedButton(
-              onPressed: _client == null ? null : () async {
-                final result = await _client!.cancelUpload();
+              onPressed: _client == null
+                  ? null
+                  : () async {
+                      final result = await _client!.cancelUpload();
 
-                if (result) {
-                  setState(() {
-                    _progress = 0;
-                    _estimate = Duration();
-                  });
-                }
-              },
+                      if (result) {
+                        setState(() {
+                          _progress = 0;
+                          _estimate = Duration();
+                        });
+                      }
+                    },
               child: Text("Cancel"),
             ),
           GestureDetector(
@@ -566,8 +598,7 @@ class _UploadPageState extends State<UploadPage> {
               color: _progress == 100 ? Colors.green : Colors.grey,
               padding: const EdgeInsets.all(8.0),
               margin: const EdgeInsets.all(8.0),
-              child: Text(
-                  _progress == 100 ? "Link to view:\n $_fileUrl" : "-"),
+              child: Text(_progress == 100 ? "Link to view:\n $_fileUrl" : "-"),
             ),
           ),
           // Display current settings summary
@@ -631,58 +662,51 @@ class _UploadPageState extends State<UploadPage> {
         return null;
       }
 
-      print("Opening file picker...");
-      print("Settings: withData: $_withData, withReadStream: $_withReadStream");
-      
-      final result = await FilePicker.platform.pickFiles(
-        withData: _withData,
-        withReadStream: _withReadStream,
-      );
-
-      if (result == null) {
-        print("No file selected");
-        return null;
-      }
-
-      print("File selected: ${result.files.first.name}");
-      print("File size: ${result.files.first.size} bytes");
-      print("File path: ${result.files.first.path}");
-      print("Has file data: ${result.files.first.bytes != null}");
-      print("Has read stream: ${result.files.first.readStream != null}");
-
-      final platformFile = result.files.first;
-
-      print("Creating XFile from PlatformFile...");
       if (kIsWeb) {
-        print("Running on Web platform, creating StreamXFileWeb");
-        final xFile = XFileFactory.fromPlatformFile(platformFile);
-        final length = await xFile.length();
-        print("Created XFile: ${xFile.name}, length: $length");
-        return xFile;
-      } else {
-        print("Running on native platform");
-        if (platformFile.path != null) {
-          print("Using file path: ${platformFile.path}");
-          final xFile = XFile(platformFile.path!);
-          final length = await xFile.length();
-          print("Created XFile: ${xFile.name}, length: $length");
+        print("Running on Web platform, using custom picker");
+        final result = await pickWebFilesForUpload(
+          allowMultiple: false,
+          acceptedFileTypes: ['*'], // Accept all
+        );
 
-          return xFile;
-        } else {
-          print("File path is null, trying to use bytes");
-          if (platformFile.bytes != null) {
-            final xFile = XFile.fromData(
-              platformFile.bytes!,
-              name: platformFile.name,
-            );
-            final length = await xFile.length();
-            print("Created XFile from bytes: ${xFile.name}, length: $length");
-            return xFile;
-          } else {
-            print("No path or bytes available for the file");
-            return null;
-          }
+        if (result == null) {
+          print("No file selected");
+          return null;
         }
+
+        final size = await result.first.length();
+
+        print("File selected: ${result.first.name}");
+        print("File size: ${size} bytes");
+        print("File path: ${result.first.path}");
+
+        return result.first;
+      } else {
+        print("Running on native platform, using file_picker");
+        print("Opening file picker...");
+        print(
+            "Settings: withData: $_withData, withReadStream: $_withReadStream");
+
+        final result = await FilePicker.platform.pickFiles(
+          withData: _withData,
+          withReadStream: _withReadStream,
+        );
+
+        if (result == null) {
+          print("No file selected");
+          return null;
+        }
+
+        print("File selected: ${result.files.first.name}");
+        print("File size: ${result.files.first.size} bytes");
+        print("File path: ${result.files.first.path}");
+        print("Has file data: ${result.files.first.bytes != null}");
+        print("Has read stream: ${result.files.first.readStream != null}");
+
+        final platformFile = result.files.first;
+
+        print("Creating XFile from PlatformFile...");
+        return platformFile.xFile;
       }
     } catch (e, stackTrace) {
       print("Error selecting file: $e");
@@ -721,7 +745,7 @@ class _UploadPageState extends State<UploadPage> {
   }
 
   int _androidSdkVersion = 0;
-  
+
   @override
   void dispose() {
     _endpointController.dispose();

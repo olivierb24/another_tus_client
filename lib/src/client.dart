@@ -4,8 +4,10 @@ import 'dart:math' show min;
 import 'dart:typed_data' show Uint8List, BytesBuilder;
 
 import 'package:cross_file/cross_file.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:speed_test_dart/speed_test_dart.dart';
+import 'package:universal_io/io.dart';
 
 import 'exceptions.dart';
 import 'package:another_tus_client/src/retry_scale.dart';
@@ -28,13 +30,12 @@ class TusClient extends TusClientBase {
     super.retries = 0,
     super.retryScale = RetryScale.constant,
     super.retryInterval = 0,
-  }) : 
-    _file = file {
+  }) : _file = file {
     _fingerprint = generateFingerprint() ?? "";
   }
 
   final XFile _file;
-  
+
   /// The file being uploaded
   XFile get file => _file;
 
@@ -47,25 +48,25 @@ class TusClient extends TusClientBase {
   Future<void> createUpload() async {
     try {
       if (_file.length is Function) {
-      // For web when length is a function that returns Future<int>
-      try {
-        _fileSize = await (_file.length as dynamic)();
-      } catch (e) {
-        print("Error getting file size from function: $e");
-        _fileSize = 0;
+        // For web when length is a function that returns Future<int>
+        try {
+          _fileSize = await (_file.length as dynamic)();
+        } catch (e) {
+          print("Error getting file size from function: $e");
+          _fileSize = 0;
+        }
+      } else {
+        // For mobile/desktop when length is a direct value
+        _fileSize = _file.length as int?;
       }
-    } else {
-      // For mobile/desktop when length is a direct value
-      _fileSize = _file.length as int?;
-    }
-    
-    print("File size determined: $_fileSize");
 
-    if (_fileSize == 0) {
-      final content = await _file.readAsBytes();
-      _fileSize = content.length;
-      print("File size from readAsBytes: $_fileSize");
-    }
+      print("File size determined: $_fileSize");
+
+      if (_fileSize == 0) {
+        final content = await _file.readAsBytes();
+        _fileSize = content.length;
+        print("File size from readAsBytes: $_fileSize");
+      }
 
       final client = getHttpClient();
       final createHeaders = Map<String, String>.from(headers ?? {})
@@ -186,6 +187,18 @@ class TusClient extends TusClientBase {
     // Save the file size as an int in a variable to avoid having to call
     int totalBytes = _fileSize as int;
 
+    // File existence check for non-web platforms before starting upload
+    if (!kIsWeb && _file.path.isNotEmpty) {
+      try {
+        final file = File(_file.path);
+        if (!file.existsSync()) {
+          throw Exception("Cannot find file ${_file.path.split('/').last}");
+        }
+      } catch (e) {
+        throw Exception("Cannot access file ${_file.path.split('/').last}: $e");
+      }
+    }
+
     // We start a stopwatch to calculate the upload speed
     final uploadStopwatch = Stopwatch()..start();
 
@@ -206,6 +219,19 @@ class TusClient extends TusClientBase {
     }
 
     while (!_pauseUpload && _offset < totalBytes) {
+      // File existence check for non-web platforms before each chunk
+      if (!kIsWeb && _file.path.isNotEmpty) {
+        try {
+          final file = File(_file.path);
+          if (!file.existsSync()) {
+            throw Exception("Cannot find file ${_file.path.split('/').last}");
+          }
+        } catch (e) {
+          throw Exception(
+              "Cannot access file ${_file.path.split('/').last}: $e");
+        }
+      }
+
       final uploadHeaders = Map<String, String>.from(headers ?? {})
         ..addAll({
           "Tus-Resumable": tusVersion,
@@ -402,8 +428,20 @@ class TusClient extends TusClientBase {
     int end = _offset + maxChunkSize;
     end = end > (_fileSize ?? 0) ? _fileSize ?? 0 : end;
 
+    // File existence check for non-web platforms before reading file
+    if (!kIsWeb && _file.path.isNotEmpty) {
+      try {
+        final file = File(_file.path);
+        if (!file.existsSync()) {
+          throw Exception("Cannot find file ${_file.path.split('/').last}");
+        }
+      } catch (e) {
+        throw Exception("Cannot access file ${_file.path.split('/').last}: $e");
+      }
+    }
+
     final result = BytesBuilder();
-    
+
     // Use XFile's openRead to get a stream of the file content
     await for (final chunk in _file.openRead(start, end)) {
       result.add(chunk);
