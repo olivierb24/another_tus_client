@@ -1,8 +1,7 @@
 # A tus client
 
-[![Pub Version](https://img.shields.io/pub/v/tus_client_dart)](https://pub.dev/packages/tus_client_dart)
-[![Build Status](https://app.travis-ci.com/tomassasovsky/tus_client.svg?branch=master)](https://travis-ci.org/tomassasovsky/tus_client)
-
+[![Pub Version](https://img.shields.io/pub/v/another_tus_client)](https://pub.dev/packages/another_tus_client)
+[![Platforms](https://img.shields.io/badge/platforms-web%20%7C%20android%20%7C%20ios%20%7C%20desktop-lightgrey)](https://pub.dev/packages/another_tus_client)
 ---
 
 A tus client in dart with support for web. [Resumable uploads using tus protocol](https://tus.io/)
@@ -237,6 +236,4 @@ For an example of usage in a Flutter app (using file picker) see: [/example](htt
 
 ## Maintainers
 
-- [Nazareno Cavazzon](https://github.com/NazarenoCavazzon)
-- [Jorge Rincon](https://github.com/jorger5)
-- [Tomás Sasovsky](https://github.com/tomassasovsky)
+- [Olivier Beaulieu](https://github.com/olivierb24)

@@ -4,7 +4,6 @@ import 'dart:math' show min;
 import 'dart:typed_data' show Uint8List, BytesBuilder;
 
 import 'package:cross_file/cross_file.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:speed_test_dart/speed_test_dart.dart';
 
@@ -107,7 +106,7 @@ class TusClient extends TusClientBase {
   /// Check if the upload is resumable
   Future<bool> isResumable() async {
     try {
-      _fileSize = (_file.length ?? 0) as int?;
+      _fileSize = _file.length as int?;
       _pauseUpload = false;
 
       if (!resumingEnabled) {
@@ -364,10 +363,10 @@ class TusClient extends TusClientBase {
   @override
   String? generateFingerprint() {
     if (_file.path.isNotEmpty) {
-      return "${_file.path}-${_file.name}-${_file.length ?? 0}";
+      return "${_file.path}-${_file.name}-${_file.length}";
     } else {
       // On web, or when path is not available, use name and length
-      return "${_file.name}-${_file.length ?? 0}";
+      return "${_file.name}-${_file.length}";
     }
   }
 
