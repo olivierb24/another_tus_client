@@ -76,3 +76,4 @@ build/
 coverage/
 coverage-html.sh
 tus_test.dart
+pubspec.lock
