@@ -11,14 +11,15 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  tus_client_dart:
+  another_tus_client:
     path: ../
   cross_file: ^0.3.4
-  file_picker: ^8.0.7
+  file_picker: ^9.0.2
   url_launcher: ^6.3.0
   path_provider: ^2.1.4
   permission_handler: ^11.3.1
   device_info_plus: ^10.1.1
+  shared_preferences: ^2.5.2
 
 dev_dependencies:
   flutter_test:

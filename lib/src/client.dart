@@ -47,16 +47,26 @@ class TusClient extends TusClientBase {
   /// Create a new [upload] throwing [ProtocolException] on server error
   Future<void> createUpload() async {
     try {
-      _fileSize = (_file.length ?? 0) as int?;
-      if (_fileSize == 0) {
-        // If file size isn't known, try to get the entire content to determine size
-        if (kIsWeb) {
-          final content = await _file.readAsBytes();
-          _fileSize = content.length;
-        } else {
-          throw ProtocolException('Cannot determine file size');
-        }
+      if (_file.length is Function) {
+      // For web when length is a function that returns Future<int>
+      try {
+        _fileSize = await (_file.length as dynamic)();
+      } catch (e) {
+        print("Error getting file size from function: $e");
+        _fileSize = 0;
       }
+    } else {
+      // For mobile/desktop when length is a direct value
+      _fileSize = _file.length as int?;
+    }
+    
+    print("File size determined: $_fileSize");
+
+    if (_fileSize == 0) {
+      final content = await _file.readAsBytes();
+      _fileSize = content.length;
+      print("File size from readAsBytes: $_fileSize");
+    }
 
       final client = getHttpClient();
       final createHeaders = Map<String, String>.from(headers ?? {})

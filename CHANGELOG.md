@@ -1,3 +1,9 @@
+## [3.0.0] - Added Web compatibility
+
+- Added platformFile to XFile converter to stream files on web
+- Added IndexedDB store for web
+- Replaced packages incompatible on web
+
 ## [2.5.0] - Update http 1.0.0
 
 - Update to http 1.0.0
