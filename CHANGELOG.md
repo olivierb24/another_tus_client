@@ -1,3 +1,13 @@
+## [3.1.1] - Removed prints
+
+- Removed debug statements
+
+## [3.1.0] - Added Web compatibility
+
+- Fixed IndexedDB storage on Web
+- Added custom file picker for Web
+- Removed unused packages
+
 ## [3.0.0] - Added Web compatibility
 
 - Added platformFile to XFile converter to stream files on web

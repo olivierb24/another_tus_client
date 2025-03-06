@@ -31,7 +31,7 @@ class TusClient extends TusClientBase {
     super.retryScale = RetryScale.constant,
     super.retryInterval = 0,
   }) : _file = file {
-    _fingerprint = generateFingerprint() ?? "";
+    _fingerprint = generateFingerprint();
   }
 
   final XFile _file;
@@ -43,6 +43,10 @@ class TusClient extends TusClientBase {
   http.Client getHttpClient() => http.Client();
 
   int _actualRetry = 0;
+
+  // Stored callbacks to be reused when resuming.
+  Function(double, Duration)? _onProgress;
+  Function()? _onComplete;
 
   /// Create a new [upload] throwing [ProtocolException] on server error
   Future<void> createUpload() async {
@@ -60,12 +64,10 @@ class TusClient extends TusClientBase {
         _fileSize = _file.length as int?;
       }
 
-      print("File size determined: $_fileSize");
 
       if (_fileSize == 0) {
         final content = await _file.readAsBytes();
         _fileSize = content.length;
-        print("File size from readAsBytes: $_fileSize");
       }
 
       final client = getHttpClient();
@@ -168,6 +170,10 @@ class TusClient extends TusClientBase {
     Map<String, String>? headers = const {},
     bool measureUploadSpeed = false,
   }) async {
+    // Save the callbacks for possible resume.
+    _onProgress = onProgress;
+    _onComplete = onComplete;
+
     setUploadData(uri, headers, metadata);
 
     final _isResumable = await isResumable();
@@ -286,14 +292,21 @@ class TusClient extends TusClientBase {
 
               // The data that hasn't been sent yet
               final remainData = totalBytes - totalSent;
+              final safeRemainData = remainData < 0 ? 0 : remainData;
 
-              // The time remaining to finish the upload
+              // The time remaining to finish the upload, clamped to 0
               final estimate = Duration(
-                seconds: (remainData / _workedUploadSpeed).round(),
+                seconds: (safeRemainData / _workedUploadSpeed).round(),
               );
 
               final progress = totalSent / totalBytes * 100;
-              onProgress((progress).clamp(0, 100), estimate);
+
+              try {
+                onProgress((progress).clamp(0, 100), estimate);
+              } catch (e) {
+                log("Error in onProgress callback: $e");
+              }
+
               _actualRetry = 0;
             }
           },
@@ -320,7 +333,11 @@ class TusClient extends TusClientBase {
         if (_offset == totalBytes && !_pauseUpload) {
           this.onCompleteUpload();
           if (onComplete != null) {
-            onComplete();
+            try {
+              onComplete();
+            } catch (e) {
+              log("Error in onComplete callback: $e");
+            }
           }
         }
       } else {
@@ -357,6 +374,41 @@ class TusClient extends TusClientBase {
     }
   }
 
+  /// Resume the current upload from where it left off.
+  Future<void> resumeUpload() async {
+    try {
+      // Set pause flag to false to allow the upload loop.
+      _pauseUpload = false;
+      // Re-fetch the server offset.
+      _offset = await _getOffset();
+
+      final totalBytes = _fileSize as int;
+      final client = getHttpClient();
+      final uploadStopwatch = Stopwatch()..start();
+
+      while (!_pauseUpload && _offset < totalBytes) {
+        final uploadHeaders = Map<String, String>.from(headers ?? {})
+          ..addAll({
+            "Tus-Resumable": tusVersion,
+            "Upload-Offset": "$_offset",
+            "Content-Type": "application/offset+octet-stream"
+          });
+
+        await _performUpload(
+          onComplete: _onComplete,
+          onProgress: _onProgress,
+          uploadHeaders: uploadHeaders,
+          client: client,
+          uploadStopwatch: uploadStopwatch,
+          totalBytes: totalBytes,
+        );
+      }
+    } catch (e) {
+      print("Error in resumeUpload: $e");
+      throw Exception("Error resuming upload: $e");
+    }
+  }
+
   /// Cancel the current upload and remove it from the store
   Future<bool> cancelUpload() async {
     try {
@@ -387,12 +439,18 @@ class TusClient extends TusClientBase {
 
   /// Generate a fingerprint for the file
   @override
-  String? generateFingerprint() {
-    if (_file.path.isNotEmpty) {
+  String generateFingerprint() {
+    try{
+    //On mobile use path
+    if (!kIsWeb && _file.path.isNotEmpty) {
       return "${_file.path}-${_file.name}-${_file.length}";
     } else {
       // On web, or when path is not available, use name and length
-      return "${_file.name}-${_file.length}";
+      return "${_file.name}-${DateTime.now().millisecondsSinceEpoch}";
+    }
+    } catch (e) {
+      // If fails return signature from date
+      return "tus-upload-${DateTime.now().millisecondsSinceEpoch}";
     }
   }
 

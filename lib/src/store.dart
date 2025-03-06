@@ -136,7 +136,7 @@ class TusIndexedDBStore implements TusStore {
             db.createObjectStore(storeName);
           }
         }
-      } as web.EventHandler);
+      }).toJS;
 
       request.onsuccess = ((web.Event event) {
         final result = request.result;
@@ -146,11 +146,11 @@ class TusIndexedDBStore implements TusStore {
         } else {
           completer.completeError('Unexpected result type');
         }
-      } as web.EventHandler);
+      }).toJS;
 
       request.onerror = ((web.Event event) {
         completer.completeError('Failed to open IndexedDB: ${request.error}');
-      } as web.EventHandler);
+      }).toJS;
     } catch (e) {
       completer.completeError('Error opening IndexedDB: $e');
     }
@@ -165,24 +165,23 @@ class TusIndexedDBStore implements TusStore {
     }
 
     final db = await _openDatabase();
-    final txn = db.transaction(storeName as JSAny, 'readwrite');
+    final txn = db.transaction(storeName.toJS, 'readwrite');
     final store = txn.objectStore(storeName);
 
     final completer = Completer<void>();
 
     try {
-      final putRequest =
-          store.put(url.toString() as JSAny?, fingerprint as JSAny?);
+      final putRequest = store.put(url.toString().toJS, fingerprint.toJS);
 
       putRequest.onsuccess = ((web.Event event) {
         completer.complete();
-      } as web.EventHandler);
+      }).toJS;
 
       putRequest.onerror = ((web.Event event) {
         completer.completeError(
           'Failed to store URL in IndexedDB: ${putRequest.error}',
         );
-      } as web.EventHandler);
+      }).toJS;
     } catch (e) {
       completer.completeError('Error in set operation: $e');
     }
@@ -197,13 +196,13 @@ class TusIndexedDBStore implements TusStore {
     }
 
     final db = await _openDatabase();
-    final txn = db.transaction(storeName as JSAny, 'readonly');
+    final txn = db.transaction(storeName.toJS, 'readonly');
     final store = txn.objectStore(storeName);
 
     final completer = Completer<Uri?>();
 
     try {
-      final getRequest = store.get(fingerprint as JSAny?);
+      final getRequest = store.get(fingerprint.toJS);
 
       getRequest.onsuccess = ((web.Event event) {
         final value = getRequest.result;
@@ -212,13 +211,13 @@ class TusIndexedDBStore implements TusStore {
         } else {
           completer.complete(null);
         }
-      } as web.EventHandler);
+      }).toJS;
 
       getRequest.onerror = ((web.Event event) {
         completer.completeError(
           'Failed to retrieve URL from IndexedDB: ${getRequest.error}',
         );
-      } as web.EventHandler);
+      }).toJS;
     } catch (e) {
       completer.completeError('Error in get operation: $e');
     }
@@ -233,23 +232,23 @@ class TusIndexedDBStore implements TusStore {
     }
 
     final db = await _openDatabase();
-    final txn = db.transaction(storeName as JSAny, 'readwrite');
+    final txn = db.transaction(storeName.toJS, 'readwrite');
     final store = txn.objectStore(storeName);
 
     final completer = Completer<void>();
 
     try {
-      final delRequest = store.delete(fingerprint as JSAny?);
+      final delRequest = store.delete(fingerprint.toJS);
 
       delRequest.onsuccess = ((web.Event event) {
         completer.complete();
-      } as web.EventHandler);
+      }).toJS;
 
       delRequest.onerror = ((web.Event event) {
         completer.completeError(
           'Failed to remove URL from IndexedDB: ${delRequest.error}',
         );
-      } as web.EventHandler);
+      }).toJS;
     } catch (e) {
       completer.completeError('Error in remove operation: $e');
     }

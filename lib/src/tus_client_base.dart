@@ -58,7 +58,7 @@ abstract class TusClientBase {
   Future<void> onCompleteUpload();
 
   /// Override this method to customize creating file fingerprint
-  String? generateFingerprint() {
+  String generateFingerprint() {
     return file.path.replaceAll(RegExp(r"\W+"), '.');
   }
 
