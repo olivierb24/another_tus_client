@@ -24,6 +24,17 @@ enum UploadStatus {
   cancelled
 }
 
+enum UploadEventType {
+  add,
+  start,
+  progress,
+  pause,
+  resume,
+  complete,
+  error,
+  cancel
+}
+
 /// Information about a managed upload
 class ManagedUpload {
   /// Unique ID for this upload
@@ -85,6 +96,13 @@ class ManagedUpload {
   }
 }
 
+class UploadEvent {
+  final ManagedUpload upload;
+  final UploadEventType eventType;
+
+  UploadEvent({required this.upload, required this.eventType});
+}
+
 /// Manager for handling multiple TUS uploads
 class TusUploadManager {
   /// TUS server endpoint URL
@@ -114,8 +132,8 @@ class TusUploadManager {
   final int retryInterval;
 
   /// Stream controller for upload events
-  final StreamController<ManagedUpload> _uploadEvents =
-      StreamController<ManagedUpload>.broadcast();
+  final StreamController<UploadEvent> _uploadEvents =
+      StreamController<UploadEvent>.broadcast();
 
   /// Map of all managed uploads
   final Map<String, ManagedUpload> _uploads = {};
@@ -126,8 +144,7 @@ class TusUploadManager {
   /// Set of currently active upload IDs
   final Set<String> _activeUploads = {};
 
-  /// Stream of upload events
-  Stream<ManagedUpload> get uploadEvents => _uploadEvents.stream;
+  Stream<UploadEvent> get uploadEvents => _uploadEvents.stream;
 
   /// Constructor
   TusUploadManager({
@@ -178,7 +195,8 @@ class TusUploadManager {
     _uploads[id] = upload;
 
     // Emit event
-    _uploadEvents.add(upload);
+    _uploadEvents
+        .add(UploadEvent(upload: upload, eventType: UploadEventType.add));
 
     // Auto-start if enabled
     if (autoStart) {
@@ -219,7 +237,6 @@ class TusUploadManager {
 
     // Update status
     upload.updateStatus(UploadStatus.uploading);
-    _uploadEvents.add(upload);
 
     try {
       await upload.client.upload(
@@ -230,23 +247,27 @@ class TusUploadManager {
         preventDuplicates: preventDuplicates,
         onStart: (client, estimate) {
           upload.updateStatus(UploadStatus.uploading);
-          _uploadEvents.add(upload);
+          _uploadEvents.add(
+              UploadEvent(upload: upload, eventType: UploadEventType.start));
         },
         onProgress: (progress, estimate) {
           upload.updateProgress(progress, estimate);
-          _uploadEvents.add(upload);
+          _uploadEvents.add(
+              UploadEvent(upload: upload, eventType: UploadEventType.progress));
         },
         onComplete: () {
           upload.updateStatus(UploadStatus.completed);
           upload.updateProgress(100, Duration.zero);
-          _uploadEvents.add(upload);
+          _uploadEvents.add(
+              UploadEvent(upload: upload, eventType: UploadEventType.complete));
           _activeUploads.remove(id);
           _processQueue();
         },
       );
     } catch (e) {
       upload.updateStatus(UploadStatus.failed, errorMessage: e.toString());
-      _uploadEvents.add(upload);
+      _uploadEvents
+          .add(UploadEvent(upload: upload, eventType: UploadEventType.error));
       _activeUploads.remove(id);
       _processQueue();
     }
@@ -262,7 +283,8 @@ class TusUploadManager {
     final result = await upload.client.pauseUpload();
     if (result) {
       upload.updateStatus(UploadStatus.paused);
-      _uploadEvents.add(upload);
+      _uploadEvents
+          .add(UploadEvent(upload: upload, eventType: UploadEventType.pause));
       _activeUploads.remove(id);
       _processQueue();
     }
@@ -289,25 +311,27 @@ class TusUploadManager {
 
     // Update status
     upload.updateStatus(UploadStatus.uploading);
-    _uploadEvents.add(upload);
-
+    UploadEvent(upload: upload, eventType: UploadEventType.resume);
     try {
       await upload.client.resumeUpload(
         onProgress: (progress, estimate) {
           upload.updateProgress(progress, estimate);
-          _uploadEvents.add(upload);
+          _uploadEvents.add(
+              UploadEvent(upload: upload, eventType: UploadEventType.progress));
         },
         onComplete: () {
           upload.updateStatus(UploadStatus.completed);
           upload.updateProgress(100, Duration.zero);
-          _uploadEvents.add(upload);
+          _uploadEvents.add(
+              UploadEvent(upload: upload, eventType: UploadEventType.complete));
           _activeUploads.remove(id);
           _processQueue();
         },
       );
     } catch (e) {
       upload.updateStatus(UploadStatus.failed, errorMessage: e.toString());
-      _uploadEvents.add(upload);
+      _uploadEvents
+          .add(UploadEvent(upload: upload, eventType: UploadEventType.error));
       _activeUploads.remove(id);
       _processQueue();
     }
@@ -327,7 +351,8 @@ class TusUploadManager {
 
     if (result) {
       upload.updateStatus(UploadStatus.cancelled);
-      _uploadEvents.add(upload);
+      _uploadEvents
+          .add(UploadEvent(upload: upload, eventType: UploadEventType.cancel));
       _uploads.remove(id);
       _activeUploads.remove(id);
       _queue.remove(id);

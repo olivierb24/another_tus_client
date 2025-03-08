@@ -1,3 +1,7 @@
+## [3.1.3] - Added Event To Stream
+
+- Added event type to manager stream
+
 ## [3.1.2] - Added Upload Manager
 
 - Added a simple upload manager class to manage and queue uploads

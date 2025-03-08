@@ -98,7 +98,8 @@ class _UploadPageState extends State<UploadPage> {
     );
     
     // Listen for upload events
-    _uploadManager.uploadEvents.listen((upload) {
+    _uploadManager.uploadEvents.listen((event) {
+      final upload = event.upload;
       if (upload.id == _activeUploadId) {
         setState(() {
           _activeUpload = upload;
