@@ -1,3 +1,10 @@
+## [3.1.2] - Added Upload Manager
+
+- Added a simple upload manager class to manage and queue uploads
+- Updated the isResumable() function on the client
+- Added ability to update/remove the callbacks when calling resumeUpload()
+- Added ability to prevent duplicate uploads if the same fingerprint already exists
+
 ## [3.1.1] - Removed prints
 
 - Removed debug statements

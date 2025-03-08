@@ -44,8 +44,9 @@ class TusClient extends TusClientBase {
 
   int _actualRetry = 0;
 
-  // Stored callbacks to be reused when resuming.
+  // Store the callbacks
   Function(double, Duration)? _onProgress;
+  Function(TusClient, Duration?)? _onStart;
   Function()? _onComplete;
 
   /// Create a new [upload] throwing [ProtocolException] on server error
@@ -63,7 +64,6 @@ class TusClient extends TusClientBase {
         // For mobile/desktop when length is a direct value
         _fileSize = _file.length as int?;
       }
-
 
       if (_fileSize == 0) {
         final content = await _file.readAsBytes();
@@ -95,7 +95,7 @@ class TusClient extends TusClientBase {
       String urlStr = response.headers["location"] ?? "";
       if (urlStr.isEmpty) {
         throw ProtocolException(
-            "missing upload Uri in response for creating upload");
+            "Missing upload Uri in response for creating upload");
       }
 
       _uploadUrl = _parseUrl(urlStr);
@@ -106,23 +106,74 @@ class TusClient extends TusClientBase {
     }
   }
 
-  /// Check if the upload is resumable
+  /// Checks if upload can be resumed, including verification with the server.
+  /// Returns true if the upload exists both in the local store and on the server.
   Future<bool> isResumable() async {
     try {
-      _fileSize = _file.length as int?;
-      _pauseUpload = false;
-
+      // Early return if resuming is not enabled
       if (!resumingEnabled) {
         return false;
       }
 
-      _uploadUrl = await store?.get(_fingerprint);
+      // Get file size if not already set
+      if (_fileSize == null) {
+        _fileSize = await _getFileSize();
+      }
 
-      if (_uploadUrl == null) {
+      // Check if we have a stored upload URL
+      final storedUrl = await store?.get(_fingerprint);
+      if (storedUrl == null) {
         return false;
       }
-      return true;
+
+      // Temporarily use the stored URL to verify with the server
+      final uploadExists = await _verifyUploadExists(storedUrl);
+
+      return uploadExists;
     } catch (e) {
+      print('Error checking resumability: $e');
+      return false;
+    }
+  }
+
+  /// Helper method to get the file size consistently across platforms
+  Future<int> _getFileSize() async {
+    try {
+      if (_file.length is Function) {
+        // For web when length is a function that returns Future<int>
+        return await (_file.length as dynamic)();
+      } else {
+        // For mobile/desktop when length is a direct value
+        return _file.length as int;
+      }
+    } catch (e) {
+      print('Error getting file size: $e');
+      // If there's an error, try reading file content
+      final content = await _file.readAsBytes();
+      return content.length;
+    }
+  }
+
+  /// Helper method to verify an upload exists on the server without changing client state
+  Future<bool> _verifyUploadExists(Uri uploadUrl) async {
+    try {
+      final client = getHttpClient();
+      final verifyHeaders = Map<String, String>.from(headers ?? {})
+        ..addAll({
+          "Tus-Resumable": tusVersion,
+        });
+
+      final response = await client.head(uploadUrl, headers: verifyHeaders);
+
+      // Check for successful response (2xx) and Upload-Offset header
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final uploadOffset = response.headers["upload-offset"];
+        return uploadOffset != null && uploadOffset.isNotEmpty;
+      }
+
+      return false;
+    } catch (e) {
+      print('Error verifying upload existence: $e');
       return false;
     }
   }
@@ -169,14 +220,26 @@ class TusClient extends TusClientBase {
     Map<String, String>? metadata = const {},
     Map<String, String>? headers = const {},
     bool measureUploadSpeed = false,
+    bool preventDuplicates = true,
   }) async {
-    // Save the callbacks for possible resume.
-    _onProgress = onProgress;
-    _onComplete = onComplete;
 
     setUploadData(uri, headers, metadata);
 
+    // Check for duplicates if requested
+    if (preventDuplicates) {
+      final (exists, canResume) = await checkExistingUpload();
+      if (exists && !canResume) {
+        throw ProtocolException(
+            'An upload with the same fingerprint exists but cannot be resumed. '
+            'If you wish to force a new upload, set preventDuplicates to false.');
+      }
+    }
+
     final _isResumable = await isResumable();
+
+    // Save the callbacks for possible resume.
+    _onProgress = onProgress;
+    _onComplete = onComplete;
 
     if (measureUploadSpeed) {
       await setUploadTestServers();
@@ -243,7 +306,7 @@ class TusClient extends TusClientBase {
           "Tus-Resumable": tusVersion,
           "Upload-Offset": "$_offset",
           "Content-Type": "application/offset+octet-stream"
-        });
+        });        
 
       await _performUpload(
         onComplete: onComplete,
@@ -254,6 +317,34 @@ class TusClient extends TusClientBase {
         totalBytes: totalBytes,
       );
     }
+  }
+
+  /// Checks if an upload with the same fingerprint already exists and can be resumed
+  /// Returns a tuple of (exists, canResume)
+  Future<(bool, bool)> checkExistingUpload() async {
+    // Generate the fingerprint if not already set
+    if (_fingerprint.isEmpty) {
+      _fingerprint = generateFingerprint();
+    }
+
+    // Check if resumable
+    final canResume = await isResumable();
+
+    // If we can resume, return (true, true)
+    if (canResume) {
+      return (true, true);
+    }
+
+    // If not resumable but exists in store, return (true, false)
+    final existsInStore = await store?.get(_fingerprint) != null;
+    if (existsInStore) {
+      // Clean up the non-resumable but existing upload
+      await store?.remove(_fingerprint);
+      return (true, false);
+    }
+
+    // Doesn't exist
+    return (false, false);
   }
 
   Future<void> _performUpload({
@@ -374,38 +465,108 @@ class TusClient extends TusClientBase {
     }
   }
 
-  /// Resume the current upload from where it left off.
-  Future<void> resumeUpload() async {
-    try {
-      // Set pause flag to false to allow the upload loop.
-      _pauseUpload = false;
-      // Re-fetch the server offset.
-      _offset = await _getOffset();
+  /// Resume a previously paused upload with intelligent callback handling
+  ///
+  /// Callback behavior:
+  /// - If a callback is provided, it replaces the previous one
+  /// - if a clear value is set to false, the callback will be removed, even if
+  ///   a new one was passed.
+  Future<void> resumeUpload({
+    Function(double, Duration)? onProgress,
+    bool clearProgressCallback = false,
+    Function(TusClient, Duration?)? onStart,
+    bool clearStartCallback = false,
+    Function()? onComplete,
+    bool clearCompleteCallback = false,
+  }) async {
+    // Handle progress callback
+    if (clearProgressCallback) {
+      // Clear flag takes precedence
+      _onProgress = null;
+    } else if (onProgress != null) {
+      // Otherwise use provided callback
+      _onProgress = onProgress;
+    }
 
-      final totalBytes = _fileSize as int;
-      final client = getHttpClient();
-      final uploadStopwatch = Stopwatch()..start();
+    // Handle start callback
+    if (clearStartCallback) {
+      _onStart = null;
+    } else if (onStart != null) {
+      _onStart = onStart;
+    }
 
-      while (!_pauseUpload && _offset < totalBytes) {
-        final uploadHeaders = Map<String, String>.from(headers ?? {})
-          ..addAll({
-            "Tus-Resumable": tusVersion,
-            "Upload-Offset": "$_offset",
-            "Content-Type": "application/offset+octet-stream"
-          });
+    // Handle complete callback
+    if (clearCompleteCallback) {
+      _onComplete = null;
+    } else if (onComplete != null) {
+      _onComplete = onComplete;
+    }
 
-        await _performUpload(
-          onComplete: _onComplete,
-          onProgress: _onProgress,
-          uploadHeaders: uploadHeaders,
-          client: client,
-          uploadStopwatch: uploadStopwatch,
-          totalBytes: totalBytes,
+    // Continue with the upload resumption
+    await _performResume();
+  }
+
+  /// Helper method to clear all callbacks at once
+  /// without calling resume
+  void clearAllCallbacks() {
+    _onProgress = null;
+    _onStart = null;
+    _onComplete = null;
+  }
+
+  /// Internal method to handle the actual resumption logic
+  Future<void> _performResume() async {
+    // Don't resume if already in progress or no upload URL
+    if (!_pauseUpload || _uploadUrl == null) {
+      return;
+    }
+
+    // Reset pause flag
+    _pauseUpload = false;
+
+    // Verify the upload exists on the server
+    if (!await _verifyUploadExists(_uploadUrl!)) {
+      throw ProtocolException('The upload no longer exists on the server');
+    }
+
+    // Get the current offset from the server
+    _offset = await _getOffset();
+
+    // Start a stopwatch for speed calculation
+    final uploadStopwatch = Stopwatch()..start();
+
+    // Notify about resuming the upload
+    if (_onStart != null) {
+      Duration? estimate;
+      if (uploadSpeed != null && _fileSize != null) {
+        final _workedUploadSpeed = uploadSpeed! * 1000000;
+        estimate = Duration(
+          seconds: ((_fileSize! - _offset) / _workedUploadSpeed).round(),
         );
       }
-    } catch (e) {
-      print("Error in resumeUpload: $e");
-      throw Exception("Error resuming upload: $e");
+      _onStart!(this, estimate);
+    }
+
+    // Continue the upload process
+    final client = getHttpClient();
+    int totalBytes = _fileSize ?? 0;
+
+    while (!_pauseUpload && _offset < totalBytes) {
+      final uploadHeaders = Map<String, String>.from(headers ?? {})
+        ..addAll({
+          "Tus-Resumable": tusVersion,
+          "Upload-Offset": "$_offset",
+          "Content-Type": "application/offset+octet-stream"
+        });
+
+      await _performUpload(
+        onComplete: _onComplete,
+        onProgress: _onProgress,
+        uploadHeaders: uploadHeaders,
+        client: client,
+        uploadStopwatch: uploadStopwatch,
+        totalBytes: totalBytes,
+      );
     }
   }
 
@@ -440,18 +601,26 @@ class TusClient extends TusClientBase {
   /// Generate a fingerprint for the file
   @override
   String generateFingerprint() {
-    try{
-    //On mobile use path
+    // For non-web platforms with file path available
     if (!kIsWeb && _file.path.isNotEmpty) {
       return "${_file.path}-${_file.name}-${_file.length}";
-    } else {
-      // On web, or when path is not available, use name and length
-      return "${_file.name}-${DateTime.now().millisecondsSinceEpoch}";
     }
-    } catch (e) {
-      // If fails return signature from date
-      return "tus-upload-${DateTime.now().millisecondsSinceEpoch}";
+
+    // For web platforms, create a robust fingerprint
+    // using name, size, modified date if available, and mime type
+    final fileAttributes = <String>[];
+
+    // Add basic file identifiers
+    fileAttributes.add(_file.name);
+    fileAttributes.add(_file.length.toString());
+
+    // Add content type if available
+    if (_file.mimeType != null && _file.mimeType!.isNotEmpty) {
+      fileAttributes.add(_file.mimeType!);
     }
+
+    // Join all attributes with a delimiter and return
+    return fileAttributes.join('-');
   }
 
   /// Get offset from server throwing [ProtocolException] on error

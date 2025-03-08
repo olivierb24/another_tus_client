@@ -42,14 +42,19 @@ class UploadPage extends StatefulWidget {
 }
 
 class _UploadPageState extends State<UploadPage> {
-  double _progress = 0;
-  Duration _estimate = Duration();
+  // Upload manager instance
+  late TusUploadManager _uploadManager;
+  
+  // Current active upload
+  String? _activeUploadId;
+  ManagedUpload? _activeUpload;
+  
   XFile? _file;
-  TusClient? _client;
   Uri? _fileUrl;
   bool _isLoading = false;
   bool _isSettingsOpen = false;
   bool _isPaused = false;
+  bool _isResumable = false;
 
   // Endpoint settings
   final TextEditingController _endpointController = TextEditingController();
@@ -77,6 +82,35 @@ class _UploadPageState extends State<UploadPage> {
     _initializeHeaderControllers();
     _initializeMetadataControllers();
     _loadSettings();
+  }
+
+  // Initialize the upload manager
+  Future<void> _initializeUploadManager() async {
+    final store = await _createStore();
+    
+    _uploadManager = TusUploadManager(
+      serverUrl: Uri.parse(_endpointController.text),
+      store: store,
+      maxConcurrentUploads: 3,
+      autoStart: false, // We'll start manually
+      measureUploadSpeed: !kIsWeb,
+      retries: 3,
+    );
+    
+    // Listen for upload events
+    _uploadManager.uploadEvents.listen((upload) {
+      if (upload.id == _activeUploadId) {
+        setState(() {
+          _activeUpload = upload;
+          _isPaused = upload.status == UploadStatus.paused;
+          
+          // Get upload URL when completed
+          if (upload.status == UploadStatus.completed) {
+            _fileUrl = upload.client.uploadUrl;
+          }
+        });
+      }
+    });
   }
 
   void _initializeHeaderControllers() {
@@ -132,6 +166,9 @@ class _UploadPageState extends State<UploadPage> {
         _initializeHeaderControllers();
         _initializeMetadataControllers();
       });
+      
+      // Initialize the upload manager after loading settings
+      await _initializeUploadManager();
     } catch (e) {
       print('Error loading settings: $e');
     } finally {
@@ -168,6 +205,9 @@ class _UploadPageState extends State<UploadPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Settings saved')),
       );
+      
+      // Re-initialize the upload manager with new settings
+      await _initializeUploadManager();
     } catch (e) {
       print('Error saving settings: $e');
       ScaffoldMessenger.of(context).showSnackBar(
@@ -180,7 +220,7 @@ class _UploadPageState extends State<UploadPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('TUS Client Upload Demo'),
+        title: Text('TUS Upload Manager Demo'),
         actions: [
           IconButton(
             icon: Icon(_isSettingsOpen ? Icons.close : Icons.settings),
@@ -377,6 +417,17 @@ class _UploadPageState extends State<UploadPage> {
   }
 
   Widget _buildUploadPanel() {
+    // Get progress and status from active upload if available
+    double progress = 0;
+    Duration estimate = Duration.zero;
+    UploadStatus status = UploadStatus.ready;
+    
+    if (_activeUpload != null) {
+      progress = _activeUpload!.progress;
+      estimate = _activeUpload!.estimate;
+      status = _activeUpload!.status;
+    }
+    
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -385,7 +436,7 @@ class _UploadPageState extends State<UploadPage> {
           Padding(
             padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             child: Text(
-              "This demo uses TUS client to upload a file",
+              "This demo uses TUS Upload Manager to upload a file",
               style: TextStyle(fontSize: 18),
             ),
           ),
@@ -401,8 +452,10 @@ class _UploadPageState extends State<UploadPage> {
 
                   _file = await _getXFile();
                   setState(() {
-                    _progress = 0;
+                    _activeUploadId = null;
+                    _activeUpload = null;
                     _fileUrl = null;
+                    _isResumable = false;
                   });
                 },
                 child: Container(
@@ -437,23 +490,12 @@ class _UploadPageState extends State<UploadPage> {
                     onPressed: _file == null
                         ? null
                         : () async {
-                            // Create a storage implementation based on platform
-                            final store = await _createStore();
-
-                            // Create a client
-                            print("Create a client");
-                            _client = TusClient(
-                              _file!,
-                              store: store, // Returns a IndexedDB when web
-                              maxChunkSize: 6 * 1024 * 1024, //6MB chunks
-                            );
-
-                            // Reset pause state.
                             setState(() {
                               _isPaused = false;
+                              _isResumable = false;
                             });
 
-                            print("Starting upload");
+                            print("Adding file to upload manager");
 
                             // Convert header entries to map
                             final headersMap = <String, String>{};
@@ -471,46 +513,27 @@ class _UploadPageState extends State<UploadPage> {
                               }
                             }
 
-                            final timestamp =
-                                DateTime.now().millisecondsSinceEpoch;
-                            final uniqueFileName =
-                                '${timestamp}_${_file?.name ?? 'file'}';
+                            final timestamp = DateTime.now().millisecondsSinceEpoch;
+                            final uniqueFileName = '${timestamp}_${_file?.name ?? 'file'}';
 
                             metadataMap["contentType"] = _file?.mimeType ??
-                                'application/octet-stream'; // Add null check with default MIME type
+                                'application/octet-stream';
                             metadataMap["objectName"] = uniqueFileName;
 
-                            await _client!.upload(
-                              onStart:
-                                  (TusClient client, Duration? estimation) {
-                                print(
-                                    "Upload started. Estimation: $estimation");
-                              },
-                              onComplete: () async {
-                                print("Completed!");
-                                if (!kIsWeb) {
-                                  final tempDir = await getTemporaryDirectory();
-                                  final tempDirectory = Directory(
-                                      '${tempDir.path}/${_file?.name}_uploads');
-                                  if (tempDirectory.existsSync()) {
-                                    tempDirectory.deleteSync(recursive: true);
-                                  }
-                                }
-                                setState(() => _fileUrl = _client!.uploadUrl);
-                              },
-                              onProgress: (progress, estimate) {
-                                print("Progress: $progress");
-                                print('Estimate: $estimate');
-                                setState(() {
-                                  _progress = progress;
-                                  _estimate = estimate;
-                                });
-                              },
-                              uri: Uri.parse(_endpointController.text),
+                            // Add the upload to the manager
+                            _activeUploadId = await _uploadManager.addUpload(
+                              _file!,
                               metadata: metadataMap,
                               headers: headersMap,
-                              measureUploadSpeed: !kIsWeb,
                             );
+                            
+                            // Get the upload object
+                            _activeUpload = _uploadManager.getUpload(_activeUploadId!);
+                            
+                            setState(() {});
+                            
+                            // Start the upload
+                            await _uploadManager.startUpload(_activeUploadId!);
                           },
                     child: Text("Upload"),
                   ),
@@ -518,31 +541,54 @@ class _UploadPageState extends State<UploadPage> {
                 SizedBox(width: 8),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: _client == null || _progress == 0
+                    onPressed: _activeUploadId == null
                         ? null
                         : () async {
-                            if (!_isPaused) {
+                            if (status == UploadStatus.uploading) {
                               print("Pausing upload...");
-                              await _client!.pauseUpload();
-                              setState(() {
-                                _isPaused = true;
-                              });
-                              print("Upload paused.");
-                            } else {
+                              await _uploadManager.pauseUpload(_activeUploadId!);
+                            } else if (status == UploadStatus.paused) {
                               print("Resuming upload...");
-                              await _client!.resumeUpload();
-                              setState(() {
-                                _isPaused = false;
-                              });
-                              print("Upload resumed.");
+                              await _uploadManager.resumeUpload(_activeUploadId!);
                             }
                           },
-                    child: Text(_isPaused ? "Resume" : "Pause"),
+                    child: Text(status == UploadStatus.paused ? "Resume" : "Pause"),
                   ),
                 ),
               ],
             ),
           ),
+          // Check Resumable button - only show when paused
+          if (status == UploadStatus.paused)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: ElevatedButton(
+                onPressed: _activeUploadId == null
+                    ? null
+                    : () async {
+                        // Check if the upload is resumable
+                        final upload = _uploadManager.getUpload(_activeUploadId!);
+                        if (upload != null) {
+                          // Use the underlying TusClient to check resumability
+                          final isResumable = await upload.client.isResumable();
+                          setState(() {
+                            _isResumable = isResumable;
+                          });
+                          
+                          // Show the result
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(isResumable
+                                  ? 'Upload is resumable!'
+                                  : 'Upload is NOT resumable.'),
+                              backgroundColor: isResumable ? Colors.green : Colors.red,
+                            ),
+                          );
+                        }
+                      },
+                child: Text("Check if Resumable"),
+              ),
+            ),
           Stack(
             children: <Widget>[
               Container(
@@ -553,7 +599,7 @@ class _UploadPageState extends State<UploadPage> {
                 child: Text(" "),
               ),
               FractionallySizedBox(
-                widthFactor: _progress / 100,
+                widthFactor: progress / 100,
                 child: Container(
                   margin: const EdgeInsets.all(8),
                   padding: const EdgeInsets.all(1),
@@ -566,41 +612,72 @@ class _UploadPageState extends State<UploadPage> {
                 padding: const EdgeInsets.all(1),
                 width: double.infinity,
                 child: Text(
-                    "Progress: ${_progress.toStringAsFixed(1)}%, estimated time: ${_printDuration(_estimate)}"),
+                    "Progress: ${progress.toStringAsFixed(1)}%, estimated time: ${_printDuration(estimate)}"),
               ),
             ],
           ),
-          if (_progress > 0)
+          if (_activeUploadId != null)
             ElevatedButton(
-              onPressed: _client == null
-                  ? null
-                  : () async {
-                      final result = await _client!.cancelUpload();
-
-                      if (result) {
-                        setState(() {
-                          _progress = 0;
-                          _estimate = Duration();
-                        });
-                      }
-                    },
+              onPressed: () async {
+                final result = await _uploadManager.cancelUpload(_activeUploadId!);
+                if (result) {
+                  setState(() {
+                    _activeUploadId = null;
+                    _activeUpload = null;
+                    _fileUrl = null;
+                    _isResumable = false;
+                  });
+                }
+              },
               child: Text("Cancel"),
             ),
-          GestureDetector(
-            onTap: _progress != 100
-                ? null
-                : () async {
-                    if (_fileUrl != null) {
-                      await launchUrl(_fileUrl!);
-                    }
-                  },
-            child: Container(
-              color: _progress == 100 ? Colors.green : Colors.grey,
+          // Status indicator
+          if (_activeUploadId != null)
+            Padding(
               padding: const EdgeInsets.all(8.0),
-              margin: const EdgeInsets.all(8.0),
-              child: Text(_progress == 100 ? "Link to view:\n $_fileUrl" : "-"),
+              child: Card(
+                color: _getStatusColor(status),
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Text(
+                    "Status: ${status.toString().split('.').last}",
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
             ),
-          ),
+          // Resumable status indicator
+          if (_isPaused)
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Card(
+                color: _isResumable ? Colors.green.shade800 : Colors.grey,
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Text(
+                    _isResumable 
+                      ? "Upload is resumable" 
+                      : "Resumability status unknown - Check above",
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ),
+            ),
+          // File URL when complete
+          if (status == UploadStatus.completed && _fileUrl != null)
+            GestureDetector(
+              onTap: () async {
+                if (_fileUrl != null) {
+                  await launchUrl(_fileUrl!);
+                }
+              },
+              child: Container(
+                color: Colors.green,
+                padding: const EdgeInsets.all(8.0),
+                margin: const EdgeInsets.all(8.0),
+                child: Text("Link to view:\n $_fileUrl"),
+              ),
+            ),
           // Display current settings summary
           Padding(
             padding: const EdgeInsets.all(8.0),
@@ -629,6 +706,26 @@ class _UploadPageState extends State<UploadPage> {
     );
   }
 
+  // Helper to get color based on upload status
+  Color _getStatusColor(UploadStatus status) {
+    switch (status) {
+      case UploadStatus.ready:
+        return Colors.blue;
+      case UploadStatus.uploading:
+        return Colors.orange;
+      case UploadStatus.paused:
+        return Colors.purple;
+      case UploadStatus.completed:
+        return Colors.green;
+      case UploadStatus.failed:
+        return Colors.red;
+      case UploadStatus.cancelled:
+        return Colors.grey;
+      default:
+        return Colors.blue;
+    }
+  }
+
   String _printDuration(Duration duration) {
     String twoDigits(int n) => n.toString().padLeft(2, '0');
     final twoDigitMinutes = twoDigits(duration.inMinutes.remainder(60));
@@ -644,7 +741,7 @@ class _UploadPageState extends State<UploadPage> {
     } else {
       // Use file system for mobile/desktop
       final tempDir = await getTemporaryDirectory();
-      final tempDirectory = Directory('${tempDir.path}/${_file?.name}_uploads');
+      final tempDirectory = Directory('${tempDir.path}/tus_uploads');
       if (!tempDirectory.existsSync()) {
         tempDirectory.createSync(recursive: true);
       }
@@ -763,6 +860,8 @@ class _UploadPageState extends State<UploadPage> {
     for (var controller in _metadataValueControllers) {
       controller.dispose();
     }
+    // Dispose upload manager
+    _uploadManager.dispose();
     super.dispose();
   }
 }
