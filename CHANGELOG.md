@@ -1,3 +1,7 @@
+## [3.1.4] - Updated README
+
+- Updated Readme
+
 ## [3.1.3] - Added Event To Stream
 
 - Added event type to manager stream

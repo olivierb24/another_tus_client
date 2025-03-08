@@ -262,9 +262,11 @@ final uploadId2 = await uploadManager.addUpload(
 
 ```dart
 // Listen to upload status changes and progress updates
-uploadManager.uploadEvents.listen((upload, event) {
+uploadManager.uploadEvents.listen((UploadEvent event) {
+  final upload = event.upload;
+  final type = event.eventType;
   print("Upload ID: ${upload.id}");
-  print("Event: ${event}"); // start, resume, pause, progress, complete, error, cancel, add
+  print("Event: ${type}"); // start, resume, pause, progress, complete, error, cancel, add
   print("Status: ${upload.status}");  // ready, uploading, paused, completed, failed, cancelled
   print("Progress: ${upload.progress}%");
   print("Estimated time: ${upload.estimate.inSeconds} seconds");
