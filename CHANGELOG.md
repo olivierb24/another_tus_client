@@ -1,3 +1,7 @@
+## [3.2.0] - Web imports conditional    
+
+- Web imports are now conditional in order to allow mobile compatibility
+
 ## [3.1.4] - Updated README
 
 - Updated Readme
