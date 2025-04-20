@@ -1,6 +1,6 @@
 ## [3.2.1] - Fixed fingerprint generation on mobile   
 
-- Updated the generate fingerprint function to work better on mobile
+- Fixed issue with file fingerprinting that caused path errors when using function references
 
 ## [3.2.0] - Web imports conditional    
 
