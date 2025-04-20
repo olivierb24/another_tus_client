@@ -222,7 +222,6 @@ class TusClient extends TusClientBase {
     bool measureUploadSpeed = false,
     bool preventDuplicates = true,
   }) async {
-
     setUploadData(uri, headers, metadata);
 
     // Check for duplicates if requested
@@ -306,7 +305,7 @@ class TusClient extends TusClientBase {
           "Tus-Resumable": tusVersion,
           "Upload-Offset": "$_offset",
           "Content-Type": "application/offset+octet-stream"
-        });        
+        });
 
       await _performUpload(
         onComplete: onComplete,
@@ -603,7 +602,17 @@ class TusClient extends TusClientBase {
   String generateFingerprint() {
     // For non-web platforms with file path available
     if (!kIsWeb && _file.path.isNotEmpty) {
-      return "${_file.path}-${_file.name}-${_file.length}";
+      // Create a safe string representation of the length
+      String lengthStr;
+      if (_file.length is Function) {
+        // If length is a function, don't include it in the fingerprint directly
+        lengthStr = "dynamic";
+      } else {
+        // If length is a direct value, use it
+        lengthStr = (_file.length as int).toString();
+      }
+
+      return "${_file.path}-${_file.name}-$lengthStr";
     }
 
     // For web platforms, create a robust fingerprint
@@ -612,7 +621,13 @@ class TusClient extends TusClientBase {
 
     // Add basic file identifiers
     fileAttributes.add(_file.name);
-    fileAttributes.add(_file.length.toString());
+
+    // Safely handle length
+    if (_file.length is Function) {
+      fileAttributes.add("dynamic");
+    } else {
+      fileAttributes.add(_file.length.toString());
+    }
 
     // Add content type if available
     if (_file.mimeType != null && _file.mimeType!.isNotEmpty) {

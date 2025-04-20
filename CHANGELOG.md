@@ -1,3 +1,7 @@
+## [3.2.1] - Fixed fingerprint generation on mobile   
+
+- Updated the generate fingerprint function to work better on mobile
+
 ## [3.2.0] - Web imports conditional    
 
 - Web imports are now conditional in order to allow mobile compatibility
