@@ -9,4 +9,10 @@ abstract class TusStore {
 
   /// Remove an entry from the store using an upload's [fingerprint].
   Future<void> remove(String fingerprint);
+
+  /// Enable or disable debug logging
+  void setDebug(bool value);
+  
+  /// Get current debug status
+  bool isDebugEnabled();
 }
