@@ -1,4 +1,8 @@
-## [3.2.w] - Updated fingerprint generation and added debug  
+## [3.2.3] - Added debug to Upload Manager class  
+
+- Added comprehensive debug on the upload manager
+
+## [3.2.2] - Updated fingerprint generation and added debug  
 
 - Fixed path error still present by using hash for fingerprint
 - Added comprehensive debug on the client and all store implementations

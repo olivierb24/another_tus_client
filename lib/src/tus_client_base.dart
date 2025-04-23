@@ -23,6 +23,9 @@ abstract class TusClientBase {
   /// List of [Server] that are good for testing speed
   List<Server>? bestServers;
 
+  /// Debug flag for verbose logging
+  final bool debug;
+
   TusClientBase(
     this.file, {
     this.store,
@@ -30,6 +33,7 @@ abstract class TusClientBase {
     this.retries = 0,
     this.retryScale = RetryScale.constant,
     this.retryInterval = 0,
+    this.debug = false,
   });
 
   /// Create a new upload URL

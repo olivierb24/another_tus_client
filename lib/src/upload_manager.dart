@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:cross_file/cross_file.dart';
-import 'package:flutter/foundation.dart';
 import 'package:another_tus_client/another_tus_client.dart';
 
 /// Status of an upload managed by [TusUploadManager]
@@ -126,6 +125,9 @@ class TusUploadManager {
   /// Whether to prevent duplicate uploads (default: true)
   final bool preventDuplicates;
 
+  /// Debug flag for verbose logging
+  final bool debug;
+
   /// Retry settings for failed uploads
   final int retries;
   final RetryScale retryScale;
@@ -146,6 +148,13 @@ class TusUploadManager {
 
   Stream<UploadEvent> get uploadEvents => _uploadEvents.stream;
 
+  /// Internal logging method that respects the debug flag
+  void _log(String message) {
+    if (debug) {
+      print('[TusUploadManager] $message');
+    }
+  }
+
   /// Constructor
   TusUploadManager({
     required this.serverUrl,
@@ -158,7 +167,12 @@ class TusUploadManager {
     this.retries = 3,
     this.retryScale = RetryScale.exponential,
     this.retryInterval = 2,
-  });
+    this.debug = false,
+  }) {
+    _log('TusUploadManager initialized with serverUrl: $serverUrl');
+    _log('Max concurrent uploads: $maxConcurrentUploads');
+    _log('Default chunk size: $defaultChunkSize bytes');
+  }
 
   /// Add a new file for upload
   /// Returns the ID of the managed upload
@@ -168,9 +182,12 @@ class TusUploadManager {
     Map<String, String>? headers,
     int? chunkSize,
   }) async {
+    _log('Adding upload for file: ${file.name}');
+    
     // Create a unique ID for this upload based on file attributes
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final id = '${file.name}-$timestamp';
+    _log('Generated upload ID: $id');
 
     // Create a TusClient for this file
     final client = TusClient(
@@ -180,6 +197,7 @@ class TusUploadManager {
       retries: retries,
       retryScale: retryScale,
       retryInterval: retryInterval,
+      debug: debug, // Pass the debug flag
     );
 
     // Create managed upload object
@@ -193,15 +211,19 @@ class TusUploadManager {
 
     // Add to our managed uploads
     _uploads[id] = upload;
+    _log('Added to managed uploads map');
 
     // Emit event
     _uploadEvents
         .add(UploadEvent(upload: upload, eventType: UploadEventType.add));
+    _log('Emitted add event');
 
     // Auto-start if enabled
     if (autoStart) {
+      _log('Auto-start enabled, starting upload immediately');
       await startUpload(id);
     } else {
+      _log('Added to queue: $id');
       _queue.add(id);
     }
 
@@ -210,18 +232,22 @@ class TusUploadManager {
 
   /// Start a specific upload by ID
   Future<void> startUpload(String id) async {
+    _log('Starting upload: $id');
     final upload = _uploads[id];
     if (upload == null) {
+      _log('Error: Upload not found: $id');
       throw Exception('Upload not found: $id');
     }
 
     // Don't start if already uploading
     if (upload.status == UploadStatus.uploading) {
+      _log('Upload already in progress, ignoring start request');
       return;
     }
 
     // Check if we've reached max concurrent uploads
     if (_activeUploads.length >= maxConcurrentUploads) {
+      _log('Max concurrent uploads reached, adding to queue');
       // Add to queue if not already there
       if (!_queue.contains(id)) {
         _queue.add(id);
@@ -231,14 +257,17 @@ class TusUploadManager {
 
     // Mark as active
     _activeUploads.add(id);
+    _log('Added to active uploads, current count: ${_activeUploads.length}');
 
     // Remove from queue if present
     _queue.remove(id);
 
     // Update status
     upload.updateStatus(UploadStatus.uploading);
+    _log('Updated status to uploading');
 
     try {
+      _log('Calling client.upload with serverUrl: $serverUrl');
       await upload.client.upload(
         uri: serverUrl,
         headers: upload.headers,
@@ -246,16 +275,19 @@ class TusUploadManager {
         measureUploadSpeed: measureUploadSpeed,
         preventDuplicates: preventDuplicates,
         onStart: (client, estimate) {
+          _log('Upload started, estimate: ${estimate?.inSeconds ?? "unknown"} seconds');
           upload.updateStatus(UploadStatus.uploading);
           _uploadEvents.add(
               UploadEvent(upload: upload, eventType: UploadEventType.start));
         },
         onProgress: (progress, estimate) {
+          _log('Progress: ${progress.toStringAsFixed(1)}%, est. time: ${estimate.inSeconds}s');
           upload.updateProgress(progress, estimate);
           _uploadEvents.add(
               UploadEvent(upload: upload, eventType: UploadEventType.progress));
         },
         onComplete: () {
+          _log('Upload completed successfully: $id');
           upload.updateStatus(UploadStatus.completed);
           upload.updateProgress(100, Duration.zero);
           _uploadEvents.add(
@@ -265,6 +297,7 @@ class TusUploadManager {
         },
       );
     } catch (e) {
+      _log('Error during upload: $e');
       upload.updateStatus(UploadStatus.failed, errorMessage: e.toString());
       _uploadEvents
           .add(UploadEvent(upload: upload, eventType: UploadEventType.error));
@@ -275,31 +308,40 @@ class TusUploadManager {
 
   /// Pause an upload
   Future<bool> pauseUpload(String id) async {
+    _log('Attempting to pause upload: $id');
     final upload = _uploads[id];
     if (upload == null || upload.status != UploadStatus.uploading) {
+      _log('Cannot pause: upload not found or not in uploading state');
       return false;
     }
 
+    _log('Calling client.pauseUpload()');
     final result = await upload.client.pauseUpload();
     if (result) {
+      _log('Upload paused successfully');
       upload.updateStatus(UploadStatus.paused);
       _uploadEvents
           .add(UploadEvent(upload: upload, eventType: UploadEventType.pause));
       _activeUploads.remove(id);
       _processQueue();
+    } else {
+      _log('Failed to pause upload');
     }
     return result;
   }
 
   /// Resume a paused upload
   Future<void> resumeUpload(String id) async {
+    _log('Attempting to resume upload: $id');
     final upload = _uploads[id];
     if (upload == null || upload.status != UploadStatus.paused) {
+      _log('Cannot resume: upload not found or not in paused state');
       return;
     }
 
     // If we've reached max concurrent uploads, add to queue
     if (_activeUploads.length >= maxConcurrentUploads) {
+      _log('Max concurrent uploads reached, adding to queue');
       if (!_queue.contains(id)) {
         _queue.add(id);
       }
@@ -308,18 +350,26 @@ class TusUploadManager {
 
     // Mark as active
     _activeUploads.add(id);
+    _log('Added to active uploads, current count: ${_activeUploads.length}');
 
     // Update status
     upload.updateStatus(UploadStatus.uploading);
-    UploadEvent(upload: upload, eventType: UploadEventType.resume);
+    _log('Updated status to uploading');
+    
+    _uploadEvents.add(
+        UploadEvent(upload: upload, eventType: UploadEventType.resume));
+    
     try {
+      _log('Calling client.resumeUpload()');
       await upload.client.resumeUpload(
         onProgress: (progress, estimate) {
+          _log('Progress: ${progress.toStringAsFixed(1)}%, est. time: ${estimate.inSeconds}s');
           upload.updateProgress(progress, estimate);
           _uploadEvents.add(
               UploadEvent(upload: upload, eventType: UploadEventType.progress));
         },
         onComplete: () {
+          _log('Upload completed successfully after resume: $id');
           upload.updateStatus(UploadStatus.completed);
           upload.updateProgress(100, Duration.zero);
           _uploadEvents.add(
@@ -329,6 +379,7 @@ class TusUploadManager {
         },
       );
     } catch (e) {
+      _log('Error resuming upload: $e');
       upload.updateStatus(UploadStatus.failed, errorMessage: e.toString());
       _uploadEvents
           .add(UploadEvent(upload: upload, eventType: UploadEventType.error));
@@ -339,17 +390,21 @@ class TusUploadManager {
 
   /// Cancel an upload
   Future<bool> cancelUpload(String id) async {
+    _log('Attempting to cancel upload: $id');
     final upload = _uploads[id];
     if (upload == null) {
+      _log('Upload not found: $id');
       return false;
     }
 
     bool result = true;
     if (upload.status == UploadStatus.uploading) {
+      _log('Calling client.cancelUpload()');
       result = await upload.client.cancelUpload();
     }
 
     if (result) {
+      _log('Upload cancelled successfully');
       upload.updateStatus(UploadStatus.cancelled);
       _uploadEvents
           .add(UploadEvent(upload: upload, eventType: UploadEventType.cancel));
@@ -357,6 +412,8 @@ class TusUploadManager {
       _activeUploads.remove(id);
       _queue.remove(id);
       _processQueue();
+    } else {
+      _log('Failed to cancel upload');
     }
 
     return result;
@@ -364,18 +421,22 @@ class TusUploadManager {
 
   /// Get all managed uploads
   List<ManagedUpload> getAllUploads() {
+    _log('Getting all uploads, count: ${_uploads.length}');
     return _uploads.values.toList();
   }
 
   /// Get a specific upload by ID
   ManagedUpload? getUpload(String id) {
+    _log('Getting upload: $id');
     return _uploads[id];
   }
 
   /// Pause all active uploads
   Future<void> pauseAll() async {
+    _log('Pausing all active uploads');
     // Create a copy of activeUploads to avoid modification during iteration
     final activeIds = List<String>.from(_activeUploads);
+    _log('Active uploads count: ${activeIds.length}');
     for (final id in activeIds) {
       await pauseUpload(id);
     }
@@ -383,10 +444,13 @@ class TusUploadManager {
 
   /// Resume all paused uploads
   Future<void> resumeAll() async {
+    _log('Resuming all paused uploads');
     final pausedUploads = _uploads.values
         .where((upload) => upload.status == UploadStatus.paused)
         .map((upload) => upload.id)
         .toList();
+    
+    _log('Paused uploads count: ${pausedUploads.length}');
 
     for (final id in pausedUploads) {
       // This will add to queue if we've reached max concurrent uploads
@@ -396,7 +460,9 @@ class TusUploadManager {
 
   /// Cancel all uploads
   Future<void> cancelAll() async {
+    _log('Cancelling all uploads');
     final uploadIds = List<String>.from(_uploads.keys);
+    _log('Total uploads to cancel: ${uploadIds.length}');
     for (final id in uploadIds) {
       await cancelUpload(id);
     }
@@ -404,18 +470,21 @@ class TusUploadManager {
 
   /// Process the upload queue
   void _processQueue() {
+    _log('Processing queue, items: ${_queue.length}, active: ${_activeUploads.length}');
     // Start uploads from the queue if we have capacity
     while (_activeUploads.length < maxConcurrentUploads && _queue.isNotEmpty) {
       final id = _queue.removeAt(0);
+      _log('Starting queued upload: $id');
       // Don't await to allow concurrent processing
       startUpload(id).catchError((e) {
-        print('Error starting queued upload $id: $e');
+        _log('Error starting queued upload $id: $e');
       });
     }
   }
 
   /// Clean up resources
   void dispose() {
+    _log('Disposing TusUploadManager');
     _uploadEvents.close();
   }
 }

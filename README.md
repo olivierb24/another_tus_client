@@ -233,6 +233,7 @@ final uploadManager = TusUploadManager(
   retryScale: RetryScale.exponential,
   retryInterval: 2,          // Wait 2, 4, 8 seconds between retries
   preventDuplicates: true,   // Prevent creating duplicate uploads
+  debug: true, // Will debug manager, client and store
 );
 ```
 
