@@ -1,3 +1,7 @@
+## [3.2.4] - Downgraded path package
+
+- Downgraded requirement on path package
+
 ## [3.2.3] - Added debug to Upload Manager class  
 
 - Added comprehensive debug on the upload manager
