@@ -43,6 +43,7 @@ final client = TusClient(
   retries: 5,
   retryScale: RetryScale.exponential,
   retryInterval: 2,
+  debug: true, // Will debug both the store and the client
 );
 ```
 

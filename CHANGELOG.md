@@ -1,3 +1,8 @@
+## [3.2.w] - Updated fingerprint generation and added debug  
+
+- Fixed path error still present by using hash for fingerprint
+- Added comprehensive debug on the client and all store implementations
+
 ## [3.2.1] - Fixed fingerprint generation on mobile   
 
 - Fixed issue with file fingerprinting that caused path errors when using function references
