@@ -66,6 +66,9 @@ class ManagedUpload {
   /// Metadata for this upload
   final Map<String, String>? metadata;
 
+  /// This is a unique hash of the file being uploaded
+  String get fingerprint => client.fingerprint;
+
   ManagedUpload({
     required this.id,
     required this.client,
@@ -174,6 +177,31 @@ class TusUploadManager {
     _log('Default chunk size: $defaultChunkSize bytes');
   }
 
+  /// Get the fingerprint for an upload by its ID
+  /// Returns null if the upload ID is not found
+  String? getFingerprintForId(String uploadId) {
+    final upload = _uploads[uploadId];
+    return upload?.fingerprint;
+  }
+
+  /// Find an upload ID by its fingerprint
+  /// If multiple uploads have the same fingerprint (same file uploaded multiple times),
+  /// returns the most recently added one
+  String? getIdByFingerprint(String fingerprint) {
+    final matchingUploads = _uploads.entries
+        .where((entry) => entry.value.fingerprint == fingerprint)
+        .toList();
+
+    // Sort by creation time (newest first) if there are multiple matches
+    if (matchingUploads.isNotEmpty) {
+      matchingUploads
+          .sort((a, b) => b.value.createdAt.compareTo(a.value.createdAt));
+      return matchingUploads.first.key;
+    }
+
+    return null;
+  }
+
   /// Add a new file for upload
   /// Returns the ID of the managed upload
   Future<String> addUpload(
@@ -183,11 +211,6 @@ class TusUploadManager {
     int? chunkSize,
   }) async {
     _log('Adding upload for file: ${file.name}');
-    
-    // Create a unique ID for this upload based on file attributes
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final id = '${file.name}-$timestamp';
-    _log('Generated upload ID: $id');
 
     // Create a TusClient for this file
     final client = TusClient(
@@ -199,6 +222,12 @@ class TusUploadManager {
       retryInterval: retryInterval,
       debug: debug, // Pass the debug flag
     );
+
+    // Create a unique ID for this upload based on file attributes
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final fingerprint = client.fingerprint;
+    final id = '$fingerprint-$timestamp';
+    _log('Generated upload ID: $id');
 
     // Create managed upload object
     final upload = ManagedUpload(
@@ -275,13 +304,15 @@ class TusUploadManager {
         measureUploadSpeed: measureUploadSpeed,
         preventDuplicates: preventDuplicates,
         onStart: (client, estimate) {
-          _log('Upload started, estimate: ${estimate?.inSeconds ?? "unknown"} seconds');
+          _log(
+              'Upload started, estimate: ${estimate?.inSeconds ?? "unknown"} seconds');
           upload.updateStatus(UploadStatus.uploading);
           _uploadEvents.add(
               UploadEvent(upload: upload, eventType: UploadEventType.start));
         },
         onProgress: (progress, estimate) {
-          _log('Progress: ${progress.toStringAsFixed(1)}%, est. time: ${estimate.inSeconds}s');
+          _log(
+              'Progress: ${progress.toStringAsFixed(1)}%, est. time: ${estimate.inSeconds}s');
           upload.updateProgress(progress, estimate);
           _uploadEvents.add(
               UploadEvent(upload: upload, eventType: UploadEventType.progress));
@@ -355,15 +386,16 @@ class TusUploadManager {
     // Update status
     upload.updateStatus(UploadStatus.uploading);
     _log('Updated status to uploading');
-    
-    _uploadEvents.add(
-        UploadEvent(upload: upload, eventType: UploadEventType.resume));
-    
+
+    _uploadEvents
+        .add(UploadEvent(upload: upload, eventType: UploadEventType.resume));
+
     try {
       _log('Calling client.resumeUpload()');
       await upload.client.resumeUpload(
         onProgress: (progress, estimate) {
-          _log('Progress: ${progress.toStringAsFixed(1)}%, est. time: ${estimate.inSeconds}s');
+          _log(
+              'Progress: ${progress.toStringAsFixed(1)}%, est. time: ${estimate.inSeconds}s');
           upload.updateProgress(progress, estimate);
           _uploadEvents.add(
               UploadEvent(upload: upload, eventType: UploadEventType.progress));
@@ -449,7 +481,7 @@ class TusUploadManager {
         .where((upload) => upload.status == UploadStatus.paused)
         .map((upload) => upload.id)
         .toList();
-    
+
     _log('Paused uploads count: ${pausedUploads.length}');
 
     for (final id in pausedUploads) {
@@ -470,7 +502,8 @@ class TusUploadManager {
 
   /// Process the upload queue
   void _processQueue() {
-    _log('Processing queue, items: ${_queue.length}, active: ${_activeUploads.length}');
+    _log(
+        'Processing queue, items: ${_queue.length}, active: ${_activeUploads.length}');
     // Start uploads from the queue if we have capacity
     while (_activeUploads.length < maxConcurrentUploads && _queue.isNotEmpty) {
       final id = _queue.removeAt(0);

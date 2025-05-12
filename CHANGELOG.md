@@ -1,3 +1,7 @@
+## [3.2.5] - Improved Manager ID
+
+- Modified the Tus Manager Class to leverage the hash fingerprint for internal ID mapping
+
 ## [3.2.4] - Downgraded path package
 
 - Downgraded requirement on path package
