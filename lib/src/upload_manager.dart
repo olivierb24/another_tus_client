@@ -420,7 +420,6 @@ class TusUploadManager {
     }
   }
 
-  /// Cancel an upload
   Future<bool> cancelUpload(String id) async {
     _log('Attempting to cancel upload: $id');
     final upload = _uploads[id];
@@ -429,26 +428,52 @@ class TusUploadManager {
       return false;
     }
 
-    bool result = true;
-    if (upload.status == UploadStatus.uploading) {
+    bool clientCancelSucceeded = false;
+    String? fingerprint;
+
+    // Capture the fingerprint first for possible fallback cleanup
+    try {
+      fingerprint = upload.client.fingerprint;
+      _log('Found fingerprint: $fingerprint');
+    } catch (e) {
+      _log('Unable to get fingerprint: $e');
+    }
+
+    // Try the standard client.cancelUpload regardless of upload status
+    try {
       _log('Calling client.cancelUpload()');
-      result = await upload.client.cancelUpload();
+      clientCancelSucceeded = await upload.client.cancelUpload();
+      _log('client.cancelUpload() result: $clientCancelSucceeded');
+    } catch (e) {
+      _log('Error in client.cancelUpload(): $e');
+
+      // If the client method failed and we have the fingerprint,
+      // try direct fingerprint cleanup as a fallback
+      if (fingerprint != null &&
+          fingerprint.isNotEmpty &&
+          upload.client.store != null) {
+        try {
+          _log('Attempting manual fingerprint cleanup: $fingerprint');
+          await upload.client.store?.remove(fingerprint);
+          _log('Manual fingerprint cleanup succeeded');
+        } catch (e) {
+          _log('Manual fingerprint cleanup failed: $e');
+        }
+      }
     }
 
-    if (result) {
-      _log('Upload cancelled successfully');
-      upload.updateStatus(UploadStatus.cancelled);
-      _uploadEvents
-          .add(UploadEvent(upload: upload, eventType: UploadEventType.cancel));
-      _uploads.remove(id);
-      _activeUploads.remove(id);
-      _queue.remove(id);
-      _processQueue();
-    } else {
-      _log('Failed to cancel upload');
-    }
+    // Always perform the upload manager's internal cleanup
+    _log('Performing TusUploadManager internal cleanup');
+    upload.updateStatus(UploadStatus.cancelled);
+    _uploadEvents
+        .add(UploadEvent(upload: upload, eventType: UploadEventType.cancel));
+    _uploads.remove(id);
+    _activeUploads.remove(id);
+    _queue.remove(id);
+    _processQueue();
 
-    return result;
+    // Return true if either the client cancel succeeded or we did a manual cleanup
+    return true;
   }
 
   /// Get all managed uploads

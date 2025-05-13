@@ -1,3 +1,7 @@
+## [3.2.6] - Fixed an issue with calling cancel via the TUS Upload Manager
+
+- The cancel method now tries to clean up no matter the state of the current upload
+
 ## [3.2.5] - Improved Manager ID
 
 - Modified the Tus Manager Class to leverage the hash fingerprint for internal ID mapping
